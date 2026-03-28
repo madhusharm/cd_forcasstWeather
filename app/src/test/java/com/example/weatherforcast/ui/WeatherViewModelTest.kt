@@ -1,8 +1,10 @@
 package com.example.weatherforcast.ui
 
 import com.example.weatherforcast.data.local.WeatherEntity
+import com.example.weatherforcast.data.remote.GeoLocation
 import com.example.weatherforcast.data.repository.WeatherRepository
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
@@ -31,9 +33,10 @@ class WeatherViewModelTest {
     @Before
     fun setup() {
         Dispatchers.setMain(testDispatcher)
-        // Default: no last city, empty cache for any query
+        // Default stubs — individual tests override as needed
         coEvery { repository.getLastSearchedCity() } returns null
         every { repository.getCachedForecast(any()) } returns flowOf(emptyList())
+        coEvery { repository.getSuggestions(any()) } returns emptyList()
         viewModel = WeatherViewModel(repository)
     }
 
@@ -258,32 +261,175 @@ class WeatherViewModelTest {
         assertNull(state.error)
     }
 
-    // ── Init: last city restored ──────────────────────────────────────────────
+    // ── App startup ───────────────────────────────────────────────────────────
 
     @Test
-    fun `init restores last searched city into the text field`() = runTest {
-        coEvery { repository.getLastSearchedCity() } returns "london"
-        every { repository.getCachedForecast("london") } returns
-            flowOf(sampleEntities("London", "London, GB"))
-
-        // Recreate ViewModel so init runs with our stub
-        val vm = WeatherViewModel(repository)
+    fun `city field is empty when app starts`() = runTest {
         advanceUntilIdle()
 
-        assertEquals("london", vm.uiState.value.city)
+        assertEquals("", viewModel.uiState.value.city)
     }
 
     @Test
-    fun `init shows cached forecast for last searched city without fetching`() = runTest {
-        val cached = sampleEntities("London", "London, GB")
-        coEvery { repository.getLastSearchedCity() } returns "london"
-        every { repository.getCachedForecast("london") } returns flowOf(cached)
-
-        val vm = WeatherViewModel(repository)
+    fun `no fetch is triggered on startup`() = runTest {
         advanceUntilIdle()
 
-        assertEquals(cached, vm.uiState.value.forecasts)
-        io.mockk.coVerify(exactly = 0) { repository.fetchAndCacheForecast(any()) }
+        coVerify(exactly = 0) { repository.fetchAndCacheForecast(any()) }
+    }
+
+    // ── Suggestions ───────────────────────────────────────────────────────────
+
+    @Test
+    fun `onCityChange with 2 or more chars triggers suggestions after debounce`() = runTest {
+        val results = listOf(GeoLocation("London", 51.5, -0.1, "United Kingdom", "GB"))
+        coEvery { repository.getSuggestions("Lo") } returns results
+
+        viewModel.onCityChange("Lo")
+        // Before debounce fires, suggestions should be empty
+        assertTrue(viewModel.uiState.value.suggestions.isEmpty())
+        assertFalse(viewModel.uiState.value.showSuggestions)
+
+        advanceUntilIdle()
+
+        assertEquals(results, viewModel.uiState.value.suggestions)
+        assertTrue(viewModel.uiState.value.showSuggestions)
+    }
+
+    @Test
+    fun `onCityChange with 1 char does not call getSuggestions`() = runTest {
+        viewModel.onCityChange("L")
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { repository.getSuggestions(any()) }
+        assertFalse(viewModel.uiState.value.showSuggestions)
+    }
+
+    @Test
+    fun `onCityChange with empty string does not call getSuggestions`() = runTest {
+        viewModel.onCityChange("")
+        advanceUntilIdle()
+
+        coVerify(exactly = 0) { repository.getSuggestions(any()) }
+    }
+
+    @Test
+    fun `showSuggestions is false when getSuggestions returns empty list`() = runTest {
+        coEvery { repository.getSuggestions(any()) } returns emptyList()
+
+        viewModel.onCityChange("Xyzzy")
+        advanceUntilIdle()
+
+        assertFalse(viewModel.uiState.value.showSuggestions)
+        assertTrue(viewModel.uiState.value.suggestions.isEmpty())
+    }
+
+    @Test
+    fun `onCityChange clears existing suggestions immediately on each keystroke`() = runTest {
+        // First load some suggestions
+        coEvery { repository.getSuggestions("Lo") } returns
+            listOf(GeoLocation("London", 51.5, -0.1, "United Kingdom", "GB"))
+        viewModel.onCityChange("Lo")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.showSuggestions)
+
+        // New keystroke hides suggestions immediately before debounce fires
+        coEvery { repository.getSuggestions("Lon") } coAnswers {
+            kotlinx.coroutines.delay(1_000)
+            emptyList()
+        }
+        viewModel.onCityChange("Lon")
+
+        assertFalse(viewModel.uiState.value.showSuggestions)
+    }
+
+    @Test
+    fun `rapid typing cancels previous debounce and only calls getSuggestions once`() = runTest {
+        viewModel.onCityChange("Lo")
+        viewModel.onCityChange("Lon")
+        viewModel.onCityChange("Lond")
+        advanceUntilIdle()
+
+        // Only the final input should have triggered an API call
+        coVerify(exactly = 1) { repository.getSuggestions(any()) }
+        coVerify(exactly = 1) { repository.getSuggestions("Lond") }
+    }
+
+    @Test
+    fun `onSuggestionSelected sets the city name in the text field`() = runTest {
+        val suggestion = GeoLocation("Paris", 48.8, 2.3, "France", "FR")
+        coEvery { repository.fetchAndCacheForecast("Paris") } returns
+            Result.success(sampleEntities("Paris", "Paris, FR"))
+        every { repository.getCachedForecast("paris") } returns
+            flowOf(sampleEntities("Paris", "Paris, FR"))
+
+        viewModel.onSuggestionSelected(suggestion)
+        advanceUntilIdle()
+
+        assertEquals("Paris", viewModel.uiState.value.city)
+    }
+
+    @Test
+    fun `onSuggestionSelected clears suggestions and hides dropdown`() = runTest {
+        val suggestion = GeoLocation("Paris", 48.8, 2.3, "France", "FR")
+        coEvery { repository.fetchAndCacheForecast("Paris") } returns
+            Result.success(sampleEntities("Paris", "Paris, FR"))
+
+        viewModel.onSuggestionSelected(suggestion)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.suggestions.isEmpty())
+        assertFalse(viewModel.uiState.value.showSuggestions)
+    }
+
+    @Test
+    fun `onSuggestionSelected triggers weather fetch for that city`() = runTest {
+        val suggestion = GeoLocation("Tokyo", 35.6, 139.6, "Japan", "JP")
+        coEvery { repository.fetchAndCacheForecast("Tokyo") } returns
+            Result.success(sampleEntities("Tokyo", "Tokyo, JP"))
+        every { repository.getCachedForecast("tokyo") } returns
+            flowOf(sampleEntities("Tokyo", "Tokyo, JP"))
+
+        viewModel.onSuggestionSelected(suggestion)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.fetchAndCacheForecast("Tokyo") }
+        assertEquals("Tokyo, JP", viewModel.uiState.value.displayCityName)
+    }
+
+    @Test
+    fun `clearSuggestions empties suggestions and sets showSuggestions to false`() = runTest {
+        coEvery { repository.getSuggestions("Be") } returns
+            listOf(GeoLocation("Berlin", 52.5, 13.4, "Germany", "DE"))
+        viewModel.onCityChange("Be")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.showSuggestions)
+
+        viewModel.clearSuggestions()
+
+        assertTrue(viewModel.uiState.value.suggestions.isEmpty())
+        assertFalse(viewModel.uiState.value.showSuggestions)
+    }
+
+    @Test
+    fun `fetchWeather clears suggestions before the fetch starts`() = runTest {
+        // Load suggestions first
+        coEvery { repository.getSuggestions("Ro") } returns
+            listOf(GeoLocation("Rome", 41.9, 12.5, "Italy", "IT"))
+        viewModel.onCityChange("Ro")
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.showSuggestions)
+
+        // Manually trigger a fetch
+        viewModel.onCityChange("Rome")
+        coEvery { repository.fetchAndCacheForecast("Rome") } coAnswers {
+            kotlinx.coroutines.delay(1_000)
+            Result.success(sampleEntities("Rome", "Rome, IT"))
+        }
+        viewModel.fetchWeather()
+
+        // Suggestions should be gone even before fetch completes
+        assertFalse(viewModel.uiState.value.showSuggestions)
+        assertTrue(viewModel.uiState.value.suggestions.isEmpty())
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

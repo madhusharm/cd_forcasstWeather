@@ -400,6 +400,69 @@ class WeatherRepositoryTest {
         assertNull(result)
     }
 
+    // ── getSuggestions ────────────────────────────────────────────────────────
+
+    @Test
+    fun `getSuggestions returns list of locations on success`() = runTest {
+        val locations = listOf(
+            GeoLocation("London", 51.5, -0.1, "United Kingdom", "GB"),
+            GeoLocation("Long Beach", 33.7, -118.1, "United States", "US")
+        )
+        coEvery { geocodingApi.searchCity(name = "Lon", count = 5) } returns
+            GeocodingResponse(results = locations)
+
+        val result = repository.getSuggestions("Lon")
+
+        assertEquals(locations, result)
+    }
+
+    @Test
+    fun `getSuggestions returns empty list when results is null`() = runTest {
+        coEvery { geocodingApi.searchCity(any(), any()) } returns GeocodingResponse(results = null)
+
+        val result = repository.getSuggestions("Xyz")
+
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
+    fun `getSuggestions returns empty list when results is empty`() = runTest {
+        coEvery { geocodingApi.searchCity(any(), any()) } returns GeocodingResponse(results = emptyList())
+
+        val result = repository.getSuggestions("Xyz")
+
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
+    fun `getSuggestions returns empty list when API throws`() = runTest {
+        coEvery { geocodingApi.searchCity(any(), any()) } throws Exception("Network error")
+
+        val result = repository.getSuggestions("London")
+
+        assertTrue(result.isEmpty())
+    }
+
+    @Test
+    fun `getSuggestions requests count of 5 from the API`() = runTest {
+        coEvery { geocodingApi.searchCity(name = "Paris", count = 5) } returns
+            GeocodingResponse(results = emptyList())
+
+        repository.getSuggestions("Paris")
+
+        io.mockk.coVerify { geocodingApi.searchCity(name = "Paris", count = 5) }
+    }
+
+    @Test
+    fun `getSuggestions passes query string to API`() = runTest {
+        coEvery { geocodingApi.searchCity(name = "New York", count = 5) } returns
+            GeocodingResponse(results = emptyList())
+
+        repository.getSuggestions("New York")
+
+        io.mockk.coVerify { geocodingApi.searchCity(name = "New York", count = 5) }
+    }
+
     // ── Test data helpers ─────────────────────────────────────────────────────
 
     private fun validGeoResponse() = GeocodingResponse(

@@ -36,16 +36,6 @@ class WeatherViewModel(private val repository: WeatherRepository) : ViewModel() 
     private var cacheObserverJob: Job? = null
     private var suggestionsJob: Job? = null
 
-    init {
-        viewModelScope.launch {
-            val lastCity = repository.getLastSearchedCity()
-            if (lastCity != null) {
-                _uiState.update { it.copy(city = lastCity) }
-                startObservingCache(lastCity)
-            }
-        }
-    }
-
     fun onCityChange(city: String) {
         _uiState.update { it.copy(city = city, error = null, showSuggestions = false) }
         suggestionsJob?.cancel()
