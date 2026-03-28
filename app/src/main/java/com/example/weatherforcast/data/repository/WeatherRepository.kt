@@ -20,6 +20,13 @@ class WeatherRepository(
 
     suspend fun getLastSearchedCity(): String? = dao.getLastSearchedCity()
 
+    suspend fun getSuggestions(query: String): List<com.example.weatherforcast.data.remote.GeoLocation> =
+        try {
+            geocodingApi.searchCity(name = query, count = 5).results ?: emptyList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+
     /**
      * 1. Geocode [city] → lat/lon + canonical city name
      * 2. Fetch 3-day daily forecast from Open-Meteo

@@ -4,8 +4,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.weatherforcast.data.local.WeatherEntity
+import com.example.weatherforcast.data.remote.GeoLocation
 import com.example.weatherforcast.data.repository.WeatherRepository
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -19,7 +21,9 @@ data class WeatherUiState(
     val displayCityName: String = "",
     val forecasts: List<WeatherEntity> = emptyList(),
     val error: String? = null,
-    val isOfflineData: Boolean = false
+    val isOfflineData: Boolean = false,
+    val suggestions: List<GeoLocation> = emptyList(),
+    val showSuggestions: Boolean = false
 )
 
 class WeatherViewModel(private val repository: WeatherRepository) : ViewModel() {
@@ -30,6 +34,7 @@ class WeatherViewModel(private val repository: WeatherRepository) : ViewModel() 
     // Bug fix #4: cancel any in-flight fetch before starting a new one
     private var fetchJob: Job? = null
     private var cacheObserverJob: Job? = null
+    private var suggestionsJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -42,7 +47,27 @@ class WeatherViewModel(private val repository: WeatherRepository) : ViewModel() 
     }
 
     fun onCityChange(city: String) {
-        _uiState.update { it.copy(city = city, error = null) }
+        _uiState.update { it.copy(city = city, error = null, showSuggestions = false) }
+        suggestionsJob?.cancel()
+        if (city.trim().length >= 2) {
+            suggestionsJob = viewModelScope.launch {
+                delay(300)
+                val results = repository.getSuggestions(city.trim())
+                _uiState.update { it.copy(suggestions = results, showSuggestions = results.isNotEmpty()) }
+            }
+        } else {
+            _uiState.update { it.copy(suggestions = emptyList()) }
+        }
+    }
+
+    fun onSuggestionSelected(suggestion: GeoLocation) {
+        suggestionsJob?.cancel()
+        _uiState.update { it.copy(city = suggestion.name, suggestions = emptyList(), showSuggestions = false) }
+        fetchWeather()
+    }
+
+    fun clearSuggestions() {
+        _uiState.update { it.copy(suggestions = emptyList(), showSuggestions = false) }
     }
 
     fun fetchWeather() {
@@ -54,6 +79,8 @@ class WeatherViewModel(private val repository: WeatherRepository) : ViewModel() 
 
         // Bug fix #4: cancel the previous fetch so rapid searches don't race
         fetchJob?.cancel()
+        suggestionsJob?.cancel()
+        _uiState.update { it.copy(suggestions = emptyList(), showSuggestions = false) }
 
         fetchJob = viewModelScope.launch {
             // Bug fix #3: clear stale forecasts immediately so the spinner is

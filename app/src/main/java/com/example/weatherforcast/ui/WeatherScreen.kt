@@ -18,12 +18,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -68,6 +73,17 @@ fun WeatherScreen(viewModel: WeatherViewModel) {
         topBar = {
             TopAppBar(
                 title = { Text("Weather Forecast", fontWeight = FontWeight.Bold) },
+                actions = {
+                    if (uiState.forecasts.isNotEmpty() && !uiState.isLoading) {
+                        IconButton(onClick = { viewModel.fetchWeather() }) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Refresh weather",
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -89,17 +105,39 @@ fun WeatherScreen(viewModel: WeatherViewModel) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedTextField(
-                    value = uiState.city,
-                    onValueChange = viewModel::onCityChange,
-                    modifier = Modifier.weight(1f),
-                    label = { Text("City name") },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { search() }),
-                    shape = RoundedCornerShape(12.dp)
-                )
+                Box(modifier = Modifier.weight(1f)) {
+                    OutlinedTextField(
+                        value = uiState.city,
+                        onValueChange = viewModel::onCityChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("City name") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { search() }),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    DropdownMenu(
+                        expanded = uiState.showSuggestions,
+                        onDismissRequest = { viewModel.clearSuggestions() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        uiState.suggestions.forEach { suggestion ->
+                            val label = buildString {
+                                append(suggestion.name)
+                                if (suggestion.country != null) append(", ${suggestion.country}")
+                            }
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus()
+                                    viewModel.onSuggestionSelected(suggestion)
+                                }
+                            )
+                        }
+                    }
+                }
                 Button(
                     onClick = search,
                     modifier = Modifier.height(56.dp),
